@@ -3,33 +3,37 @@ package main
 import (
 	"fmt"
 
+	"github.com/Sef1995/go-sqs-poller/worker"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/service/sqs"
-
-	"github.com/h2ik/go-sqs-poller/worker"
 )
 
 var (
-	aws_access_key string
-	aws_secret_key string
-	aws_region     string
+	awsAccessKey string
+	awsSecretKey string
+	awsRegion    string
 )
 
 func main() {
 
 	// create a config
-	aws_config := &aws.Config{
-		Credentials: credentials.NewStaticCredentials(aws_access_key, aws_secret_key, ""),
-		Region:      aws.String(aws_region),
+	awsConfig := &aws.Config{
+		Credentials: credentials.NewStaticCredentials(awsAccessKey, awsSecretKey, ""),
+		Region:      aws.String(awsRegion),
 	}
 
 	// create the new client with the aws_config passed in
-	svc, url := worker.NewSQSClient("go-webhook-queue-test", aws_config)
-	// set the queue url
-	worker.QueueURL = url
-	// start the worker
-	worker.Start(svc, worker.HandlerFunc(func(msg *sqs.Message) error {
+	svc, url := worker.NewSQSClient("go-webhook-queue-test", awsConfig)
+
+	cfg := worker.Config{
+		QueueURL:           url,
+		MaxNumberOfMessage: 10,
+		WaitTimeSecond:     20,
+		LoggingEnabled:     true,
+	}
+
+	cfg.Start(svc, worker.HandlerFunc(func(msg *sqs.Message) error {
 		fmt.Println(aws.StringValue(msg.Body))
 		return nil
 	}))

@@ -2,7 +2,6 @@ package worker
 
 import (
 	"fmt"
-	"log"
 	"sync"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -34,59 +33,66 @@ func NewInvalidEventError(event, msg string) InvalidEventError {
 	return InvalidEventError{event: event, msg: msg}
 }
 
-// Exported Variables
-var (
+type Config struct {
 	// what is the queue url we are connecting to, Defaults to empty
-	QueueURL string = ""
+	QueueURL string
 	// The maximum number of messages to return. Amazon SQS never returns more messages
 	// than this value (however, fewer messages might be returned). Valid values
-	// are 1 to 10. Default is 10.
-	MaxNumberOfMessage int64 = 10
+	// are 1 to 10.
+	MaxNumberOfMessage int64
 	// The duration (in seconds) for which the call waits for a message to arrive
 	// in the queue before returning. If a message is available, the call returns
 	// sooner than WaitTimeSeconds.
-	WaitTimeSecond int64 = 20
+	WaitTimeSecond int64
 
-	Log LoggerIFace = &logger{}
-)
+	Log            LoggerIFace
+	LoggingEnabled bool
+}
 
 // Start starts the polling and will continue polling till the application is forcibly stopped
-func Start(svc *sqs.SQS, h Handler) {
+func (c *Config) Start(svc *sqs.SQS, h Handler) {
 	for {
-		Log.Debug("worker: Start Polling")
+		c.Log.Debug("worker: Start Polling")
+
 		params := &sqs.ReceiveMessageInput{
-			QueueUrl:            aws.String(QueueURL), // Required
-			MaxNumberOfMessages: aws.Int64(MaxNumberOfMessage),
+			QueueUrl:            aws.String(c.QueueURL), // Required
+			MaxNumberOfMessages: aws.Int64(c.MaxNumberOfMessage),
 			MessageAttributeNames: []*string{
 				aws.String("All"), // Required
 			},
-			WaitTimeSeconds: aws.Int64(WaitTimeSecond),
+			WaitTimeSeconds: aws.Int64(c.WaitTimeSecond),
 		}
 
 		resp, err := svc.ReceiveMessage(params)
+
 		if err != nil {
-			log.Println(err)
+			c.Log.Error(err)
 			continue
 		}
+
 		if len(resp.Messages) > 0 {
-			run(svc, h, resp.Messages)
+			c.run(svc, h, resp.Messages)
 		}
 	}
 }
 
 // poll launches goroutine per received message and wait for all message to be processed
-func run(svc *sqs.SQS, h Handler, messages []*sqs.Message) {
+func (c *Config) run(svc *sqs.SQS, h Handler, messages []*sqs.Message) {
 	numMessages := len(messages)
-	Log.Info(fmt.Sprintf("worker: Received %d messages", numMessages))
+	c.Log.Info(fmt.Sprintf("worker: Received %d messages", numMessages))
 
 	var wg sync.WaitGroup
 	wg.Add(numMessages)
+
 	for i := range messages {
 		go func(m *sqs.Message) {
 			// launch goroutine
 			defer wg.Done()
-			if err := handleMessage(svc, m, h); err != nil {
-				Log.Error(err.Error())
+
+			if err := c.handleMessage(svc, m, h); err != nil {
+				if c.LoggingEnabled {
+					c.Log.Error(err.Error())
+				}
 			}
 		}(messages[i])
 	}
@@ -94,24 +100,26 @@ func run(svc *sqs.SQS, h Handler, messages []*sqs.Message) {
 	wg.Wait()
 }
 
-func handleMessage(svc *sqs.SQS, m *sqs.Message, h Handler) error {
+func (c *Config) handleMessage(svc *sqs.SQS, m *sqs.Message, h Handler) error {
 	var err error
 	err = h.HandleMessage(m)
+
 	if _, ok := err.(InvalidEventError); ok {
-		Log.Error(err.Error())
+		c.Log.Error(err.Error())
 	} else if err != nil {
 		return err
 	}
 
 	params := &sqs.DeleteMessageInput{
-		QueueUrl:      aws.String(QueueURL), // Required
-		ReceiptHandle: m.ReceiptHandle,      // Required
+		QueueUrl:      aws.String(c.QueueURL), // Required
+		ReceiptHandle: m.ReceiptHandle,        // Required
 	}
 	_, err = svc.DeleteMessage(params)
+
 	if err != nil {
 		return err
 	}
-	Log.Debug(fmt.Sprintf("worker: deleted message from queue: %s", aws.StringValue(m.ReceiptHandle)))
+	c.Log.Debug(fmt.Sprintf("worker: deleted message from queue: %s", aws.StringValue(m.ReceiptHandle)))
 
 	return nil
 }
